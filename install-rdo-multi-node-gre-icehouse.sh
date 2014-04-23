@@ -27,7 +27,7 @@ STORAGE_VM_IP=172.16.73.142
 i=0
 QEMU_COMPUTE_VM_NAMES=()
 QEMU_COMPUTE_VM_IPS=()
-for val in ${@:2}
+for val in ${@:1}
 do
    if [ $(($i % 2)) = 0 ]; then
        QEMU_COMPUTE_VM_NAMES+=($val)
