@@ -554,6 +554,7 @@ done
 
 echo "Applying additional OVS configuration on $NETWORK_VM_IP"
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
+ovs-vsctl add-br br-ex && \
 ovs-vsctl list-ports br-ex | grep eth2 || ovs-vsctl add-port br-ex eth2"
 #ovs-vsctl add-br br-ex && \ this was needed before the above command when trying out ml2 as packstack didn't make it...
 
@@ -606,12 +607,12 @@ echo "Get cirros image for testing"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
 glance image-create --name="CirrOS-0.3.2" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://cdn.download.cirros-cloud.net/0.3.2/cirros-0.3.2-x86_64-disk.img &&\
-source ./keystonerc_admin && \
-glance image-create --name="Ubuntu-Server-12.04.4" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://uec-images.ubuntu.com/precise/current/precise-server-cloudimg-amd64-disk1.img"
-sleep 10
+sleep 10"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
 nova image-list"
+#source ./keystonerc_admin && \
+#glance image-create --name="Ubuntu-Server-12.04.4" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://uec-images.ubuntu.com/precise/current/precise-server-cloudimg-amd64-disk1.img
 
 
 echo "Setting up demo user"
@@ -682,6 +683,10 @@ nova secgroup-add-rule default udp 1 65535 0.0.0.0/0"
 
 echo "Test network"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "ping -c 4 $EXTERNAL_NETWORK_IP_POOL_START"
+
+
+echo "waiting 3 mins for everything to check in"
+sleep 180
 
 
 echo "Rebooting all nodes to make sure the install succeded"
