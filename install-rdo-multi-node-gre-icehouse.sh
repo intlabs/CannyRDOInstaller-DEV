@@ -40,6 +40,12 @@ done
 RDO_ADMIN=root
 RDO_ADMIN_PASSWORD=acoman
 
+
+EXTERNAL_NETWORK_IP_POOL_START=172.16.73.220
+EXTERNAL_NETWORK_IP_POOL_END=172.16.73.240
+EXTERNAL_NETWORK_GATEWAY_IP=172.16.73.2
+EXTERNAL_NETWORK_ADDRESS=172.16.73.0\/24
+
 ANSWERS_FILE=packstack_answers.conf
 NOVA_CONF_FILE=/etc/nova/nova.conf
 CEILOMETER_CONF_FILE=/etc/ceilometer/ceilometer.conf
@@ -112,26 +118,31 @@ DATA_IP_BASE=10.13.8
 DATA_IP_NETMASK=255.255.255.0
 NETWORK_VM_DATA_IP=$DATA_IP_BASE.1
 
-
+echo "Configuring networking - on controller node"
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$CONTROLLER_VM_IP eth0
 set_hostname $RDO_ADMIN@$CONTROLLER_VM_IP $CONTROLLER_VM_NAME.$DOMAIN $CONTROLLER_VM_IP
 # See https://bugs.launchpad.net/packstack/+bug/1307018
 set_fake_iface_for_rdo_neutron_bug $RDO_ADMIN@$CONTROLLER_VM_IP eth1
 
 
+echo "Configuring networking - on network node"
 config_openstack_network_adapter $RDO_ADMIN@$NETWORK_VM_IP eth1 $NETWORK_VM_DATA_IP $DATA_IP_NETMASK
 config_openstack_network_adapter $RDO_ADMIN@$NETWORK_VM_IP eth2
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$NETWORK_VM_IP eth0
 set_hostname $RDO_ADMIN@$NETWORK_VM_IP $NETWORK_VM_NAME.$DOMAIN $NETWORK_VM_IP
 
 
+echo "Configuring networking - on dashboard node"
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$DASHBOARD_VM_IP eth0
 set_hostname $RDO_ADMIN@$DASHBOARD_VM_IP $DASHBOARD_VM_NAME.$DOMAIN $DASHBOARD_VM_IP
 
 
+echo "Configuring networking - on storage node"
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$STORAGE_VM_IP eth0
 set_hostname $RDO_ADMIN@$STORAGE_VM_IP $STORAGE_VM_NAME.$DOMAIN $STORAGE_VM_IP
 
+
+echo "Configuring networking - on compute nodes"
 i=0
 for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
 do
@@ -174,6 +185,7 @@ done
 # TODO: Check external network
 
 
+echo "UPDATING CENTOS on all nodes"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 yum -y upgrade"
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
@@ -187,7 +199,9 @@ do
     run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP "\
     yum -y upgrade"
 done
-echo "Rebooting all nodes to make sure the install succeded"
+
+
+echo "Rebooting all nodes to make sure the update succeded & install a new kernel if required"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP reboot
@@ -198,6 +212,8 @@ do
 done
 echo "Wait for reboot"
 sleep 120
+echo "Waiting for SSH to be available on $CONTROLLER_VM_IP"
+wait_for_listening_port $CONTROLLER_VM_IP 22 $MAX_WAIT_SECONDS
 
 
 echo "Creating Logical volumes for iscsi targets on storage node - this is destructive!"
@@ -219,29 +235,32 @@ service tgtd start && chkconfig tgtd on"
 
 
 echo "Installing iSCSI target on Storage Node - for swift"
+SWIFT_ISCSI_USER_PW=`openssl rand -hex 10`
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "\
 tgtadm --lld iscsi --mode target --op new --tid 1 --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:swift && \
 tgtadm --lld iscsi --mode logicalunit --op new --tid 1 --lun 1 --backing-store /dev/swift-volumes-iscsi/swift-volume-iscsi && \
 tgtadm --lld iscsi --mode target --op bind --tid 1 --initiator-address $CONTROLLER_VM_IP && \
-tgtadm --lld iscsi --mode account --op new --user swiftiscsi_user --password swiftiscsi_user_password && \
+tgtadm --lld iscsi --mode account --op new --user swiftiscsi_user --password $SWIFT_ISCSI_USER_PW && \
 tgtadm --lld iscsi --mode account --op bind --tid 1 --user swiftiscsi_user"
 
 
 echo "Installing iSCSI target on Storage Node - for glance"
+GLANCE_ISCSI_USER_PW=`openssl rand -hex 10`
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "\
 tgtadm --lld iscsi --mode target --op new --tid 2 --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:glance && \
 tgtadm --lld iscsi --mode logicalunit --op new --tid 2 --lun 1 --backing-store /dev/glance-volumes-iscsi/glance-volume-iscsi && \
 tgtadm --lld iscsi --mode target --op bind --tid 2 --initiator-address $CONTROLLER_VM_IP && \
-tgtadm --lld iscsi --mode account --op new --user glanceiscsi_user --password glanceiscsi_user_password && \
+tgtadm --lld iscsi --mode account --op new --user glanceiscsi_user --password $GLANCE_ISCSI_USER_PW && \
 tgtadm --lld iscsi --mode account --op bind --tid 2 --user glanceiscsi_user"
 
 
 echo "Installing iSCSI target on Storage Node - for cinder"
+CINDER_ISCSI_USER_PW=`openssl rand -hex 10`
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "\
 tgtadm --lld iscsi --mode target --op new --tid 3 --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:cinder && \
 tgtadm --lld iscsi --mode logicalunit --op new --tid 3 --lun 1 --backing-store /dev/cinder-volumes-iscsi/cinder-volume-iscsi && \
 tgtadm --lld iscsi --mode target --op bind --tid 3 --initiator-address $CONTROLLER_VM_IP && \
-tgtadm --lld iscsi --mode account --op new --user cinderiscsi_user --password cinderiscsi_user_password && \
+tgtadm --lld iscsi --mode account --op new --user cinderiscsi_user --password $CINDER_ISCSI_USER_PW && \
 tgtadm --lld iscsi --mode account --op bind --tid 3 --user cinderiscsi_user"
 
 
@@ -250,24 +269,25 @@ run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "cat << EOF > /etc/tgt/targets.
 default-driver iscsi
 <target iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:swift>
     backing-store /dev/swift-volumes-iscsi/swift-volume-iscsi
-    incominguser swiftiscsi_user swiftiscsi_user_password
+    incominguser swiftiscsi_user $SWIFT_ISCSI_USER_PW
     initiator-address $CONTROLLER_VM_IP
 </target>
 <target iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:glance>
     backing-store /dev/cinder-volumes-iscsi/cinder-volume-iscsi
-    incominguser glanceiscsi_user glanceiscsi_user_password
+    incominguser glanceiscsi_user $GLANCE_ISCSI_USER_PW
     initiator-address $CONTROLLER_VM_IP
 </target>
 <target iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:cinder>
     backing-store /dev/glance-volumes-iscsi/glance-volume-iscsi
-    incominguser cinderiscsi_user cinderiscsi_user_password
+    incominguser cinderiscsi_user $CINDER_ISCSI_USER_PW
     initiator-address $CONTROLLER_VM_IP
 </target>
 EOF"
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "service tgtd restart"
+
+
 echo "checking our targets are still running on storage node"
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "tgt-admin --dump"
-
 
 
 echo "Setting up iptables firewall on Storage Node for iscsi"
@@ -287,13 +307,13 @@ iscsiadm --mode discoverydb --type sendtargets --portal $STORAGE_VM_IP  --discov
 
 echo "Writing iSCSI initiator target authorization credentials on Controller Node"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
-sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = swiftiscsi_user\\n node.session.auth.password = swiftiscsi_user_password /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:swift/$STORAGE_VM_IP\,3260\,1/default && \
+sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = swiftiscsi_user\\n node.session.auth.password = $SWIFT_ISCSI_USER_PW /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:swift/$STORAGE_VM_IP\,3260\,1/default && \
 iscsiadm --mode node --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:swift --portal $STORAGE_VM_IP -l "
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
-sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = glanceiscsi_user\\n node.session.auth.password = glanceiscsi_user_password /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:glance/$STORAGE_VM_IP\,3260\,1/default && \
+sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = glanceiscsi_user\\n node.session.auth.password = $GLANCE_ISCSI_USER_PW /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:glance/$STORAGE_VM_IP\,3260\,1/default && \
 iscsiadm --mode node --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:glance --portal $STORAGE_VM_IP -l "
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
-sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = cinderiscsi_user\\n node.session.auth.password = cinderiscsi_user_password /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:cinder/$STORAGE_VM_IP\,3260\,1/default && \
+sed -i -e 's/node.session.auth.authmethod = None/node.session.auth.authmethod = CHAP\\n node.session.auth.username = cinderiscsi_user\\n node.session.auth.password = $CINDER_ISCSI_USER_PW /g' /var/lib/iscsi/nodes/iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME\:cinder/$STORAGE_VM_IP\,3260\,1/default && \
 iscsiadm --mode node --targetname iqn.2014-16.lan.cannycomputing.$STORAGE_VM_NAME:cinder --portal $STORAGE_VM_IP -l "
 
 
@@ -331,6 +351,11 @@ run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP reboot
 echo "Wait for reboot..."
 sleep 60
+echo "Waiting for SSH to be available on $CONTROLLER_VM_IP"
+wait_for_listening_port $CONTROLLER_VM_IP 22 $MAX_WAIT_SECONDS
+
+
+echo "Checking iscsi targets are initiated on controller node following reboot"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 lvscan && \
 vgscan && \
@@ -370,6 +395,7 @@ done
 
 CONFIG_NOVA_KS_PW=c233a6fe53c649cc
 
+
 echo "Configuring Packstack answer file services"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 crudini --set packstack_answers.conf general CONFIG_HORIZON_HOST $DASHBOARD_VM_IP && \
@@ -393,10 +419,21 @@ run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L3_HOSTS $NETWORK_VM_IP && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_DHCP_HOSTS $NETWORK_VM_IP && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_METADATA_HOSTS $NETWORK_VM_IP && \
-crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L2_PLUGIN openvswitch && \
+crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L2_PLUGIN ml2 && \
+crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_ML2_TYPE_DRIVERS gre && \
+crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_ML2_TENANT_NETWORK_TYPES gre && \
+crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_ML2_TUNNEL_ID_RANGES 1:1000 && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TENANT_NETWORK_TYPE gre && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_RANGES 1:1000 && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_IF eth1"
+
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L3_HOSTS $NETWORK_VM_IP && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_DHCP_HOSTS $NETWORK_VM_IP && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_METADATA_HOSTS $NETWORK_VM_IP && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L2_PLUGIN openvswitch && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TENANT_NETWORK_TYPE gre && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_RANGES 1:1000 && \
+#crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_IF eth1"
 
 #this gets neuron up and running with the ml2 plugin
 #but there are some bugs at the time of writing 23/4/2014 that were making it more of a headache than it seems worth
@@ -437,24 +474,14 @@ disable_neutron_ovs_agent () {
 disable_neutron_ovs_agent $RDO_ADMIN@$CONTROLLER_VM_IP $CONTROLLER_VM_NAME.$DOMAIN
 
 
-echo "Fix bugs in neutron on controller - I hope anyway"
+echo "For some reason packstack sets the agent down time to less then the poll time - so services appear to alternate betwen up and down (nyquest's law..) so it should be at least double the standand poll time of 60 seconds"
 #https://bugs.launchpad.net/neutron/+bug/1298640
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 sed -i -e 's/agent_down_time = 9/agent_down_time = 75 /g' /etc/neutron/neutron.conf"
 
 
-echo "Fix bugs in neutron on controller - I hope anyway"
+echo "Fix bugs in neutron with packstack/puppet-openstack - this will probably be unnessaray soon as its a showstopper for lanuching instances unless fixed"
 #http://lists.openstack.org/pipermail/openstack/2013-November/003049.htmlqw≈
-#run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
-#sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
-#run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
-#sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
-#for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
-#do
-#    run_ssh_cmd_with_retry $RDO_ADMIN@$QEMU_COMPUTE_VM_IP "\
-#    sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
-#done
-
 SERVICE_TENANT_ID=`run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
 keystone tenant-get services | grep id | sed 's/ id //' | grep -io '[0-z]*'"`
@@ -486,6 +513,7 @@ do
     openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_password $CONFIG_NOVA_KS_PW && \
     openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_auth_url http://$CONTROLLER_VM_IP:35357/v2.0"
 done
+
 
 echo "Additional firewall rules"
 # See https://github.com/stackforge/packstack/commit/ca46227119fd6a6e5b0f1ef19e8967d92a3b1f6c
@@ -527,7 +555,7 @@ done
 echo "Applying additional OVS configuration on $NETWORK_VM_IP"
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
 ovs-vsctl list-ports br-ex | grep eth2 || ovs-vsctl add-port br-ex eth2"
-#ovs-vsctl add-br br-ex && \
+#ovs-vsctl add-br br-ex && \ this was needed before the above command when trying out ml2 as packstack didn't make it...
 
 
 echo "Configuring Cinder for thin provisioning"
@@ -577,7 +605,9 @@ neutron agent-list -f csv | sed -e '1d' | sed -rn 's/\".*\",\".*\",\".*\",\"(.*)
 echo "Get cirros image for testing"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
-glance image-create --name="CirrOS-0.3.2" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://cdn.download.cirros-cloud.net/0.3.2/cirros-0.3.2-x86_64-disk.img"
+glance image-create --name="CirrOS-0.3.2" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://cdn.download.cirros-cloud.net/0.3.2/cirros-0.3.2-x86_64-disk.img &&\
+source ./keystonerc_admin && \
+glance image-create --name="Ubuntu-Server-12.04.4" --disk-format=qcow2 --container-format=bare --is-public=true --copy-from http://uec-images.ubuntu.com/precise/current/precise-server-cloudimg-amd64-disk1.img"
 sleep 10
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
@@ -601,15 +631,14 @@ printf 'export OS_USERNAME=demo' > keystonerc_demo && \
 sed -i '$ a\export OS_USERNAME=demo' keystonerc_demo && \
 sed -i '$ a\export OS_TENANT_NAME=demo' keystonerc_demo && \
 sed -i '$ a\export OS_PASSWORD=demo' keystonerc_demo && \
-sed -i '$ a\export OS_AUTH_URL=http://172.16.73.132:35357/v2.0/' keystonerc_demo && \
-sed -i "$ a\export PS1='[\u@\h \W(keystone_demo)]\$ '" keystonerc_demo"
+sed -i '$ a\export OS_AUTH_URL=http://172.16.73.132:35357/v2.0/' keystonerc_demo" 
 
 
 echo "Create External network"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 source ./keystonerc_admin && \
 neutron net-create ext-net --shared --router:external=true && \
-neutron subnet-create ext-net --name ext-subnet  --allocation-pool start=172.16.73.220,end=172.16.73.240 --disable-dhcp --gateway 172.16.73.2 172.16.73.0/24"
+neutron subnet-create ext-net --name ext-subnet  --allocation-pool start=$EXTERNAL_NETWORK_IP_POOL_START,end=$EXTERNAL_NETWORK_IP_POOL_END --disable-dhcp --gateway $EXTERNAL_NETWORK_GATEWAY_IP $EXTERNAL_NETWORK_ADDRESS"
 
 
 echo "Restarting Neutron networking"
@@ -652,11 +681,11 @@ nova secgroup-add-rule default udp 1 65535 0.0.0.0/0"
 
 
 echo "Test network"
-run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "ping -c 4 172.16.73.220"
+run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "ping -c 4 $EXTERNAL_NETWORK_IP_POOL_START"
 
 
 echo "Rebooting all nodes to make sure the install succeded"
-run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "reboot"
+run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP reboot
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP reboot
@@ -665,12 +694,12 @@ do
     run_ssh_cmd_with_retry $RDO_ADMIN@$QEMU_COMPUTE_VM_IP reboot
 done
 echo "Wait for reboot"
-sleep 120
+sleep 180
 echo "Waiting for SSH to be available on $CONTROLLER_VM_IP"
 wait_for_listening_port $CONTROLLER_VM_IP 22 $MAX_WAIT_SECONDS
 
 echo "Test network"
-run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "ping -c 4 172.16.73.220"
+run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "ping -c 4 $EXTERNAL_NETWORK_IP_POOL_START"
 
 echo "RDO installed!"
 echo "SSH access:"
