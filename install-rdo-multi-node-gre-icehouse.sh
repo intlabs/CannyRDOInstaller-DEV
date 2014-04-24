@@ -44,21 +44,21 @@ ANSWERS_FILE=packstack_answers.conf
 NOVA_CONF_FILE=/etc/nova/nova.conf
 CEILOMETER_CONF_FILE=/etc/ceilometer/ceilometer.conf
 
-DOMAIN=canneycomputing.lan
+DOMAIN=cannycomputing.lan
 
 MAX_WAIT_SECONDS=600
 
 BASEDIR=$(dirname $0)
-
 . $BASEDIR/utils.sh
+
 
 if [ ! -f "$SSH_KEY_FILE" ]; then
     ssh-keygen -q -t rsa -f $SSH_KEY_FILE -N "" -b 4096
 fi
 SSH_KEY_FILE_PUB=$SSH_KEY_FILE.pub
 
-echo "Configuring SSH public key authentication on the RDO hosts"
 
+echo "Configuring SSH public key authentication on the RDO hosts"
 configure_ssh_pubkey_auth $RDO_ADMIN $CONTROLLER_VM_IP $SSH_KEY_FILE_PUB $RDO_ADMIN_PASSWORD
 configure_ssh_pubkey_auth $RDO_ADMIN $NETWORK_VM_IP $SSH_KEY_FILE_PUB $RDO_ADMIN_PASSWORD
 configure_ssh_pubkey_auth $RDO_ADMIN $DASHBOARD_VM_IP $SSH_KEY_FILE_PUB $RDO_ADMIN_PASSWORD
@@ -68,6 +68,7 @@ for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
 do
     configure_ssh_pubkey_auth $RDO_ADMIN $QEMU_COMPUTE_VM_IP $SSH_KEY_FILE_PUB $RDO_ADMIN_PASSWORD
 done
+
 
 echo "Sync hosts date and time"
 update_host_date $RDO_ADMIN@$CONTROLLER_VM_IP
@@ -79,6 +80,7 @@ for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
 do
     update_host_date $RDO_ADMIN@$QEMU_COMPUTE_VM_IP
 done
+
 
 config_openstack_network_adapter () {
     SSHUSER_HOST=$1
@@ -110,18 +112,22 @@ DATA_IP_BASE=10.13.8
 DATA_IP_NETMASK=255.255.255.0
 NETWORK_VM_DATA_IP=$DATA_IP_BASE.1
 
+
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$CONTROLLER_VM_IP eth0
 set_hostname $RDO_ADMIN@$CONTROLLER_VM_IP $CONTROLLER_VM_NAME.$DOMAIN $CONTROLLER_VM_IP
 # See https://bugs.launchpad.net/packstack/+bug/1307018
 set_fake_iface_for_rdo_neutron_bug $RDO_ADMIN@$CONTROLLER_VM_IP eth1
+
 
 config_openstack_network_adapter $RDO_ADMIN@$NETWORK_VM_IP eth1 $NETWORK_VM_DATA_IP $DATA_IP_NETMASK
 config_openstack_network_adapter $RDO_ADMIN@$NETWORK_VM_IP eth2
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$NETWORK_VM_IP eth0
 set_hostname $RDO_ADMIN@$NETWORK_VM_IP $NETWORK_VM_NAME.$DOMAIN $NETWORK_VM_IP
 
+
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$DASHBOARD_VM_IP eth0
 set_hostname $RDO_ADMIN@$DASHBOARD_VM_IP $DASHBOARD_VM_NAME.$DOMAIN $DASHBOARD_VM_IP
+
 
 set_interface_static_ip_from_dhcp_centos $RDO_ADMIN@$STORAGE_VM_IP eth0
 set_hostname $RDO_ADMIN@$STORAGE_VM_IP $STORAGE_VM_NAME.$DOMAIN $STORAGE_VM_IP
@@ -138,6 +144,7 @@ do
 
     ((i++))
 done
+
 
 echo "Validating network configuration"
 set_test_network_config () {
@@ -166,6 +173,31 @@ done
 
 # TODO: Check external network
 
+
+run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
+yum -y upgrade"
+run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
+yum -y upgrade"
+run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP "\
+yum -y upgrade"
+run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP "\
+yum -y upgrade"
+for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
+do
+    run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP "\
+    yum -y upgrade"
+done
+echo "Rebooting all nodes to make sure the install succeded"
+run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP reboot
+run_ssh_cmd_with_retry $RDO_ADMIN@$STORAGE_VM_IP reboot
+run_ssh_cmd_with_retry $RDO_ADMIN@$DASHBOARD_VM_IP reboot
+run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP reboot
+for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
+do
+    run_ssh_cmd_with_retry $RDO_ADMIN@$QEMU_COMPUTE_VM_IP reboot
+done
+echo "Wait for reboot"
+sleep 120
 
 
 echo "Creating Logical volumes for iscsi targets on storage node - this is destructive!"
@@ -336,6 +368,7 @@ do
     QEMU_COMPUTE_VM_IP_LIST+=$QEMU_COMPUTE_VM_IP
 done
 
+CONFIG_NOVA_KS_PW=c233a6fe53c649cc
 
 echo "Configuring Packstack answer file services"
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
@@ -351,6 +384,7 @@ run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
 crudini --set $ANSWERS_FILE general CONFIG_SSH_KEY /root/.ssh/id_rsa.pub && \
 crudini --set $ANSWERS_FILE general CONFIG_NTP_SERVERS 0.pool.ntp.org,1.pool.ntp.org,2.pool.ntp.org,3.pool.ntp.org && \
 crudini --set $ANSWERS_FILE general CONFIG_CINDER_VOLUMES_SIZE 20G && \
+crudini --set $ANSWERS_FILE general CONFIG_NOVA_KS_PW $CONFIG_NOVA_KS_PW && \
 crudini --set $ANSWERS_FILE general CONFIG_NOVA_COMPUTE_HOSTS $QEMU_COMPUTE_VM_IP_LIST && \
 crudini --del $ANSWERS_FILE general CONFIG_NOVA_NETWORK_HOST"
 
@@ -364,6 +398,8 @@ crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TENANT_NETWORK_TYPE gre &
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_RANGES 1:1000 && \
 crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_OVS_TUNNEL_IF eth1"
 
+#this gets neuron up and running with the ml2 plugin
+#but there are some bugs at the time of writing 23/4/2014 that were making it more of a headache than it seems worth
 #crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_L2_PLUGIN ml2 && \
 #crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_ML2_TYPE_DRIVERS gre && \
 #crudini --set $ANSWERS_FILE general CONFIG_NEUTRON_ML2_TENANT_NETWORK_TYPES gre && \
@@ -409,16 +445,47 @@ sed -i -e 's/agent_down_time = 9/agent_down_time = 75 /g' /etc/neutron/neutron.c
 
 echo "Fix bugs in neutron on controller - I hope anyway"
 #http://lists.openstack.org/pipermail/openstack/2013-November/003049.htmlqw≈
+#run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
+#sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+#run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
+#sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+#for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
+#do
+#    run_ssh_cmd_with_retry $RDO_ADMIN@$QEMU_COMPUTE_VM_IP "\
+#    sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+#done
+
+SERVICE_TENANT_ID=`run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
+source ./keystonerc_admin && \
+keystone tenant-get services | grep id | sed 's/ id //' | grep -io '[0-z]*'"`
+echo $SERVICE_TENANT_ID
 run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "\
-sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_status_changes True && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_data_changes True && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_url http://$CONTROLLER_VM_IP:8774/v2 && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_username nova && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_tenant_id $SERVICE_TENANT_ID && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_password $CONFIG_NOVA_KS_PW && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_auth_url http://$CONTROLLER_VM_IP:35357/v2.0"
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
-sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_status_changes True && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_data_changes True && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_url http://$CONTROLLER_VM_IP:8774/v2 && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_username nova && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_tenant_id $SERVICE_TENANT_ID && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_password $CONFIG_NOVA_KS_PW && \
+openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_auth_url http://$CONTROLLER_VM_IP:35357/v2.0"
 for QEMU_COMPUTE_VM_IP in ${QEMU_COMPUTE_VM_IPS[@]}
 do
     run_ssh_cmd_with_retry $RDO_ADMIN@$QEMU_COMPUTE_VM_IP "\
-    sed -i -e 's/\# nova_url = http:\/\/127.0.0.1:8774/nova_url = http:\/\/$CONTROLLER_VM_IP:8774\/v2\/ /g' /etc/neutron/neutron.conf"
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_status_changes True && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT notify_nova_on_port_data_changes True && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_url http://$CONTROLLER_VM_IP:8774/v2 && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_username nova && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_tenant_id $SERVICE_TENANT_ID && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_password $CONFIG_NOVA_KS_PW && \
+    openstack-config --set /etc/neutron/neutron.conf DEFAULT nova_admin_auth_url http://$CONTROLLER_VM_IP:35357/v2.0"
 done
-
 
 echo "Additional firewall rules"
 # See https://github.com/stackforge/packstack/commit/ca46227119fd6a6e5b0f1ef19e8967d92a3b1f6c
@@ -459,10 +526,8 @@ done
 
 echo "Applying additional OVS configuration on $NETWORK_VM_IP"
 run_ssh_cmd_with_retry $RDO_ADMIN@$NETWORK_VM_IP "\
-ovs-vsctl add-br br-ex && \
 ovs-vsctl list-ports br-ex | grep eth2 || ovs-vsctl add-port br-ex eth2"
-ovs-vsctl add-br br-eth1 && \
-ovs-vsctl list-ports br-eth1 | grep eth1 || ovs-vsctl add-port br-eth1 eth1"
+#ovs-vsctl add-br br-ex && \
 
 
 echo "Configuring Cinder for thin provisioning"
@@ -536,8 +601,8 @@ printf 'export OS_USERNAME=demo' > keystonerc_demo && \
 sed -i '$ a\export OS_USERNAME=demo' keystonerc_demo && \
 sed -i '$ a\export OS_TENANT_NAME=demo' keystonerc_demo && \
 sed -i '$ a\export OS_PASSWORD=demo' keystonerc_demo && \
-sed -i '$ a\export OS_AUTH_URL=http://172.16.73.132:35357/v2.0/' keystonerc_demo"
-#run_ssh_cmd_with_retry $RDO_ADMIN@$CONTROLLER_VM_IP "sed -i "$ a\export PS1='[\u@\h \W(keystone_demo)]\$ '" keystonerc_demo"
+sed -i '$ a\export OS_AUTH_URL=http://172.16.73.132:35357/v2.0/' keystonerc_demo && \
+sed -i "$ a\export PS1='[\u@\h \W(keystone_demo)]\$ '" keystonerc_demo"
 
 
 echo "Create External network"
